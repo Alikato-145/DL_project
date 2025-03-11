@@ -2,7 +2,9 @@ import streamlit as st
 import os
 import cv2
 import torch
+import pandas as pd
 from PIL import Image, ImageOps
+import time
 
 # Import the patched ultralytics first
 from fix_ultralytics import ultralytics
@@ -10,115 +12,319 @@ from ultralytics import YOLO
 import supervision as sv
 from detection import detection
 
-# Set the page configuration
+# Set page configuration with wider layout and custom theme
 st.set_page_config(
     page_title="Plate Detection and Cost Calculation",
-    page_icon=":guardsman:",
+    page_icon="🍽️",
+    layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# using cpu for inference
+# Apply custom CSS for better styling
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #1E88E5;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        color: #424242;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .stButton button {
+        background-color: #1E88E5;
+        color: white;
+        font-weight: bold;
+        border-radius: 5px;
+        padding: 0.5rem 1rem;
+        width: 100%;
+    }
+    .section-header {
+        font-weight: bold;
+        font-size: 1.2rem;
+        margin-top: 1rem;
+        margin-bottom: 1rem;
+        border-bottom: 2px solid #1E88E5;
+        padding-bottom: 0.5rem;
+    }
+    .price-card {
+        background-color: #f0f8ff;
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .highlight-total {
+        font-size: 2rem;
+        color: #1E88E5;
+        font-weight: bold;
+        text-align: center;
+        padding: 1rem;
+        background-color: #e3f2fd;
+        border-radius: 10px;
+        margin-top: 1rem;
+    }
+    .stTable {
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        border-radius: 10px;
+        overflow: hidden;
+    }
+    .upload-section, .camera-section {
+        background-color: #f5f5f5;
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+    .color-dot {
+        height: 15px;
+        width: 15px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+    }
+    .progress-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+        margin: 20px 0;
+    }
+    .result-section {
+        padding: 20px;
+        background-color: white;
+        border-radius: 10px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        margin-top: 20px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Header section with logo and title
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    st.markdown('<h1 class="main-header">🍽️ Plate Detection System</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">ข้าวทุกจาน อาหารทุกอย่าง team</p>', unsafe_allow_html=True)
+
+# Initialize device and model
 device = torch.device("cpu")
-print(ultralytics.__version__)
-print(torch.__version__)
-# Title for the app
-st.title("Plate Detection and Cost Calculation")
-st.subheader("dev : ข้าวทุกจาน อาหารทุกอย่าง team")
 
-# Initialize YOLO model with loaded weights
-@st.cache_resource  # Cache the model to avoid reloading it every time
-def load_model():
-    return YOLO("project/lts_model/runs/detect/train/best.pt")
-model = load_model()  # To check if the model loads correctly
-
-# Add price configuration in sidebar
-st.sidebar.header("Price Configuration")
-prices = {}
-colors = ["Red", "Yellow", "Green", "Blue", "Cyan", "Purple", "White", "Black"]
-for color in colors:
-    prices[color] = st.sidebar.number_input(f"{color} Plate Price", min_value=0, value=0, step=5)
-
-# choose to use camera or upload files
-st.subheader("Choose to use camera or upload files")
-camera = st.camera_input("Take a picture")
-uploadfiles = st.file_uploader("Upload images", type=["jpg", "jpeg", "png", "JPG"], accept_multiple_files=True)
-
-# Check if the camera input is used
-if camera:
-    # Create a directory to save the images
-    if not os.path.exists("images"):
-        os.makedirs("images")
-
-    # Save the image from the camera input
-    file_path = os.path.join("images", "captured_image.jpg")
-    with open(file_path, "wb") as f:
-        f.write(camera.getbuffer())
-
-    st.success("Image saved successfully!")
-
-    # Display the captured image
-    st.image(camera, caption="Captured Image", use_container_width=True)
-
-    # Run detection on the captured image
-    annotated_image, color_counts = detection(file_path, model)
+# Load model with a proper loading indicator
+with st.spinner("Loading detection model..."):
+    @st.cache_resource
+    def load_model():
+        return YOLO("project/model_demo/best.pt")
     
-    # Save the annotated image
-    annotated_image_path = os.path.join("images", "annotated_captured_image.jpg")
-    cv2.imwrite(annotated_image_path, annotated_image)
+    try:
+        model = load_model()
+        st.success("✅ Model loaded successfully")
+    except Exception as e:
+        st.error(f"❌ Error loading model: {e}")
+        st.stop()
 
-    # Display the annotated image
-    st.image(annotated_image, caption="Annotated Image", use_container_width=True)
+# Create two tabs for different input methods
+tab1, tab2 = st.tabs(["📷 Camera Input", "📁 Upload Images"])
+
+# Sidebar configuration
+with st.sidebar:
+    st.markdown('<div class="section-header">⚙️ Price Configuration</div>', unsafe_allow_html=True)
     
-    # Display color counts and calculate total price
-    st.subheader("Color Counts")
+    st.markdown('<div class="price-card">', unsafe_allow_html=True)
+    
+    # Add color indicators to price inputs
+
+    prices = {}
+    colors = ["Red", "Yellow", "Green", "Blue", "Cyan", "Purple", "White", "Black"]
+    colors_thai = ["ราคาจานสีแดง", "ราคาจานสีเหลือง", "ราคาจานสีเขียว", "ราคาจานสีน้ำเงิน", "ราคาจานสีเขียวแกมน้ำเงิน", "ราคาจานสีม่วง", "ราคาจานสีขาว", "ราคาจานสีดำ"]
+    color_hex = {
+        "Red": "#FF5252", 
+        "Yellow": "#FFD740", 
+        "Green": "#69F0AE", 
+        "Blue": "#448AFF", 
+        "Cyan": "#18FFFF", 
+        "Purple": "#E040FB", 
+        "White": "#FFFFFF", 
+        "Black": "#212121"
+    }
+
+    for color, color_th in zip(colors, colors_thai):
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            st.markdown(f'<div style="display: flex; align-items: center; height: 38px;"><span class="color-dot" style="background-color: {color_hex[color]}; width: 20px; height: 20px; border-radius: 50%; display: inline-block;"></span></div>', unsafe_allow_html=True)
+        with col2:
+            prices[color] = st.number_input(color_th, min_value=0, value=0, step=5)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown('<div class="section-header">🛠️ Advanced Settings</div>', unsafe_allow_html=True)
+    conf_threshold = 0.3
+    iou_threshold = 0.5
+    
+    st.markdown('<div class="section-header">ℹ️ App Info</div>', unsafe_allow_html=True)
+    st.info("""
+    This application detects colored plates in images and calculates the total cost based on your price configuration.
+    
+    **Usage:**
+    1. Set prices for each plate color
+    2. Take a photo or upload images
+    3. View detection results and cost calculation
+    """)
+
+# Function to create and display a cost table
+def display_cost_table(color_counts, prices):
+    # Create data for the table
+    table_data = []
     total_price = 0
-    for color, count in color_counts.items():
+    
+    # Sort colors by count (descending)
+    sorted_colors = sorted(color_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    for color, count in sorted_colors:
         price = prices.get(color, 0)
         item_total = price * count
         total_price += item_total
-        st.write(f"{color}: {count} plates × {price} = {item_total}")
+        
+        # Add color indicator
+        color_indicator = f'<span class="color-dot" style="background-color: {color_hex.get(color, "#CCCCCC")};"></span> {color}'
+        
+        table_data.append({
+            "Color": color_indicator,
+            "Count": count,
+            "Price per Plate": f"฿{price}",
+            "Subtotal": f"฿{item_total}"
+        })
     
-    st.subheader(f"Total Price: {total_price}")
+    # Add a total row
+    
+    # Create a DataFrame for the table
+    df = pd.DataFrame(table_data)
+    
+    # Display the table with HTML formatting for color dots
+    st.write("### Detailed Cost Breakdown")
+    st.markdown(pd.DataFrame(df).to_html(escape=False, index=False), unsafe_allow_html=True)
+    
+    # Display a large, highlighted total
+    st.markdown(f'<div class="highlight-total">💰 Total Cost: ฿{total_price}</div>', unsafe_allow_html=True)
+    
+    return total_price
 
-if uploadfiles:
-    # Create a directory to save the images
-    if not os.path.exists("images"):
-        os.makedirs("images")
+# Function to process images and display results
+def process_image(file_path, filename=None):
+    with st.spinner("Detecting plates..."):
+        # Show progress bar
+        progress_bar = st.progress(0)
+        for i in range(100):
+            # Simulate processing time
+            time.sleep(0.01)
+            progress_bar.progress(i + 1)
+        
+        # Run detection with advanced parameters
+        try:
+            annotated_image, color_counts = detection(
+                file_path, 
+                model, 
+                conf_threshold=conf_threshold, 
+                iou_threshold=iou_threshold
+            )
+            
+            # Save the annotated image
+            if not os.path.exists("images"):
+                os.makedirs("images")
+                
+            annotated_image_path = os.path.join("images", f"annotated_{filename or 'captured_image.jpg'}")
+            cv2.imwrite(annotated_image_path, annotated_image)
+            
+            # Display results in columns
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown('<div class="section-header">📊 Detection Results</div>', unsafe_allow_html=True)
+                st.image(annotated_image, caption="Detected Plates", use_column_width=True)
+                
+                # Display detection summary
+                plate_count = sum(color_counts.values())
+                st.metric("Total Plates Detected", plate_count)
+                
+            with col2:
+                st.markdown('<div class="section-header">💵 Cost Calculation</div>', unsafe_allow_html=True)
+                display_cost_table(color_counts, prices)
+            
+            return True
+            
+        except Exception as e:
+            st.error(f"Error processing image: {e}")
+            return False
 
-    # Save the images to the directory
-    for file in uploadfiles:
-        file_path = os.path.join("images", file.name)
+# Camera tab content
+with tab1:
+    st.markdown('<div class="camera-section">', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📷 Take a Photo</div>', unsafe_allow_html=True)
+    
+    camera = st.camera_input("", key="camera_input")
+    
+    if camera:
+        # Create a directory to save the images
+        if not os.path.exists("images"):
+            os.makedirs("images")
+
+        # Save the image from the camera input
+        file_path = os.path.join("images", "captured_image.jpg")
         with open(file_path, "wb") as f:
-            f.write(file.getbuffer())
+            f.write(camera.getbuffer())
 
-    st.success("Images saved successfully!")
+        st.success("Image captured successfully!")
+        
+        # Process the captured image
+        st.markdown('<div class="result-section">', unsafe_allow_html=True)
+        process_image(file_path)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # Process each uploaded image
-    for file in uploadfiles:
-        st.write(f"## Processing: {file.name}")
-        
-        # Display the uploaded image
-        st.image(file.getvalue(), caption=file.name, use_container_width=True)
-        
-        # Run detection for the uploaded image
-        file_path = os.path.join("images", file.name)
-        annotated_image, color_counts = detection(file_path, model)
+# Upload tab content
+with tab2:
+    st.markdown('<div class="upload-section">', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📁 Upload Images</div>', unsafe_allow_html=True)
+    
+    uploadfiles = st.file_uploader(
+        "Choose images to upload",
+        type=["jpg", "jpeg", "png", "JPG"],
+        accept_multiple_files=True,
+        help="You can upload multiple images at once"
+    )
+    
+    if uploadfiles:
+        # Create a directory to save the images
+        if not os.path.exists("images"):
+            os.makedirs("images")
 
-        # Save the annotated image
-        annotated_image_path = os.path.join("images", "annotated_" + file.name)
-        cv2.imwrite(annotated_image_path, annotated_image)
+        # Save the images to the directory
+        for file in uploadfiles:
+            file_path = os.path.join("images", file.name)
+            with open(file_path, "wb") as f:
+                f.write(file.getbuffer())
 
-        # Display the annotated image
-        st.image(annotated_image, caption="Annotated Image", use_container_width=True)
-        
-        # Display color counts and calculate total price
-        st.subheader("Color Counts")
-        total_price = 0
-        for color, count in color_counts.items():
-            price = prices.get(color, 0)
-            item_total = price * count
-            total_price += item_total
-            st.write(f"{color}: {count} plates × {price} = {item_total}")
-        
-        st.subheader(f"Total Price: {total_price}")
-        st.markdown("---")
+        st.success(f"✅ {len(uploadfiles)} images uploaded successfully!")
+
+        # Create an expander for each uploaded image
+        for file in uploadfiles:
+            with st.expander(f"📷 {file.name}", expanded=True):
+                st.markdown('<div class="result-section">', unsafe_allow_html=True)
+                
+                # Display the uploaded image
+                st.image(file.getvalue(), caption=file.name, use_column_width=True)
+                
+                # Process the uploaded image
+                file_path = os.path.join("images", file.name)
+                process_image(file_path, file.name)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# Footer
+st.markdown("---")
+st.markdown("© 2025 ข้าวทุกจาน อาหารทุกอย่าง team | All Rights Reserved")

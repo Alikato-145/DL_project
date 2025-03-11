@@ -1,10 +1,83 @@
-import supervision as sv
 import cv2
-import os
 import numpy as np
-import torch
-from ultralytics import YOLO
 from PIL import Image, ImageOps
+import supervision as sv
+
+def histogram_equalization(image):
+    """
+    ทำ Histogram Equalization บนช่อง Value (V) ของภาพ HSV
+    """
+    # แปลงจาก RGB เป็น HSV
+    hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+
+    # แยกช่อง Hue, Saturation, Value
+    h, s, v = cv2.split(hsv)
+
+    # ทำ Histogram Equalization บนช่อง V (ความสว่าง)
+    v_eq = cv2.equalizeHist(v)
+
+    # รวมกลับเป็น HSV
+    hsv_eq = cv2.merge([h, s, v_eq])
+    # แปลงกลับเป็น RGB
+    image_eq = cv2.cvtColor(hsv_eq, cv2.COLOR_HSV2RGB)
+
+    return image_eq
+
+def white_balance_simple(image):
+    """
+    Simple white balance by scaling channels based on average intensity
+    """
+    # Convert to float for calculations
+    image_float = image.astype(np.float32)
+
+    # Calculate the mean for each channel
+    mean_r = np.mean(image_float[:,:,0])
+    mean_g = np.mean(image_float[:,:,1])
+    mean_b = np.mean(image_float[:,:,2])
+
+    # Calculate scaling factors
+    scale_r = 128 / mean_r if mean_r > 0 else 1
+    scale_g = 128 / mean_g if mean_g > 0 else 1
+    scale_b = 128 / mean_b if mean_b > 0 else 1
+
+    # Scale each channel
+    image_float[:,:,0] *= scale_r
+    image_float[:,:,1] *= scale_g
+    image_float[:,:,2] *= scale_b
+
+    # Clip values to valid range
+    image_balanced = np.clip(image_float, 0, 255).astype(np.uint8)
+
+    return image_balanced
+
+def white_balance_gray_world(image):
+    """
+    Gray World Assumption white balance method
+    """
+    # Convert to float for calculations
+    image_float = image.astype(np.float32)
+
+    # Calculate average of each channel
+    r_avg = np.mean(image_float[:,:,0])
+    g_avg = np.mean(image_float[:,:,1])
+    b_avg = np.mean(image_float[:,:,2])
+
+    # Calculate the overall average
+    avg = (r_avg + g_avg + b_avg) / 3
+
+    # Calculate scaling factors
+    r_scale = avg / r_avg if r_avg > 0 else 1
+    g_scale = avg / g_avg if g_avg > 0 else 1
+    b_scale = avg / b_avg if b_avg > 0 else 1
+
+    # Apply scaling
+    image_float[:,:,0] *= r_scale
+    image_float[:,:,1] *= g_scale
+    image_float[:,:,2] *= b_scale
+
+    # Clip values to valid range
+    image_balanced = np.clip(image_float, 0, 255).astype(np.uint8)
+    return image_balanced
 
 def detect_color_from_bbox(image, bbox, crop_ratio=0.8):
     """
@@ -58,6 +131,9 @@ def identify_color(avg_hue, avg_sat, avg_val):
     sat = avg_sat / 255 * 100  # Convert to percentage
     val = avg_val / 255 * 100  # Convert to percentage
 
+    # Print debug information
+    print(f"🔍 Hue: {hue:.2f}, Saturation: {sat:.2f}%, Value: {val:.2f}%")
+
     # Check for white, black, or gray conditions
     if val < 20:
         return "Black"
@@ -83,90 +159,152 @@ def identify_color(avg_hue, avg_sat, avg_val):
         else:
             return "Purple"
     elif 270 <= hue < 330:  # Magenta to Red
-        return "Red2"
+        return "Red"
 
     return "Unknown"
 
-def detection(image, model):
+def calculate_iou(box1, box2):
     """
-    Run object detection on an image using the YOLO model.
-    Also detects colors of detected objects.
+    Calculate Intersection over Union (IoU) between two bounding boxes
     
     Args:
-        image: Input image for detection (path or Streamlit image)
-        model: YOLO model instance
-        
+    - box1, box2: [x1, y1, x2, y2] format bounding boxes
+    
     Returns:
-        Tuple of (annotated_image, color_counts)
+    - IoU value between 0 and 1
     """
-    # Handle different image input types
-    if isinstance(image, str) and os.path.isfile(image):
-        # If image is a file path
-        img_cv2 = cv2.imread(image)
-        img_cv2 = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
-        # Also open as PIL image for color detection
-        img_pil = Image.open(image)
-        img_pil = ImageOps.exif_transpose(img_pil)
-        img_pil = img_pil.convert("RGB")
-    elif hasattr(image, 'getvalue'):
-        # If image is a Streamlit UploadedFile or camera input
-        file_bytes = np.asarray(bytearray(image.getvalue()), dtype=np.uint8)
-        img_cv2 = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-        img_cv2 = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
-        # Also create PIL image from bytes for color detection
-        img_pil = Image.open(image)
-        img_pil = ImageOps.exif_transpose(img_pil)
-        img_pil = img_pil.convert("RGB")
-    else:
-        # Assume it's already a numpy array
-        img_cv2 = image
-        # Convert to PIL for color detection
-        img_pil = Image.fromarray(img_cv2)
+    # Calculate intersection area
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
     
-    # Run detection
-    results = model(img_cv2, verbose=False)
+    if x2 < x1 or y2 < y1:
+        return 0.0  # No intersection
     
-    # Convert to supervision Detections format
-    detections = sv.Detections.from_ultralytics(results[0]).with_nms()
+    intersection_area = (x2 - x1) * (y2 - y1)
+    
+    # Calculate areas of both boxes
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    
+    # Calculate IoU
+    iou = intersection_area / float(box1_area + box2_area - intersection_area)
+    return iou
 
-    # Create custom labels list
-    custom_labels = []
-    color_counts = {}
+def filter_duplicate_detections(detections, iou_threshold=0.5, area_ratio_threshold=0.8):
+    """
+    Filter out duplicate detections based on IoU and area ratio
     
-    for i, box in enumerate(detections.xyxy):
-        # Detect color
-        avg_color = detect_color_from_bbox(img_pil, box)
-        color = identify_color(*avg_color)
+    Args:
+    - detections: sv.Detections object
+    - iou_threshold: Threshold for IoU to consider boxes as duplicates
+    - area_ratio_threshold: Threshold for area ratio to prefer larger boxes
+    
+    Returns:
+    - Filtered sv.Detections object
+    """
+    if len(detections) <= 1:
+        return detections
+    
+    # Get detections data
+    boxes = detections.xyxy
+    confidences = detections.confidence
+    
+    # Calculate areas for each box
+    areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in boxes]
+    
+    # Create a list of detection indices sorted by confidence
+    indices = list(range(len(boxes)))
+    indices.sort(key=lambda i: confidences[i], reverse=True)
+    
+    keep_indices = []
+    
+    # Process boxes in order of confidence
+    for i in range(len(indices)):
+        current_idx = indices[i]
         
-        # Count colors
-        color_counts[color] = color_counts.get(color, 0) + 1
+        # If already processed and removed, skip
+        if current_idx not in indices:
+            continue
         
-        # Create custom label
-        if hasattr(detections, 'class_id') and i < len(detections.class_id):
-            class_id = detections.class_id[i]
-            class_name = model.names[class_id]
-            if hasattr(detections, 'confidence') and i < len(detections.confidence):
-                conf = detections.confidence[i]
-                label = f"{class_name} ({color}, {conf:.2f})"
-            else:
-                label = f"{class_name} ({color})"
-        else:
-            label = f"Object ({color})"
+        keep = True
+        current_box = boxes[current_idx]
+        current_area = areas[current_idx]
+        
+        # Compare with all previously kept boxes
+        for kept_idx in keep_indices:
+            kept_box = boxes[kept_idx]
+            kept_area = areas[kept_idx]
             
-        custom_labels.append(label)
-
-    # Annotate image with bounding boxes
-    box_annotator = sv.BoxAnnotator(thickness=5, color=sv.Color.GREEN)
-    annotated_image = img_cv2.copy()
-    annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections)
+            # Calculate IoU
+            iou = calculate_iou(current_box, kept_box)
+            
+            # Calculate area ratio (smaller/larger)
+            area_ratio = min(current_area, kept_area) / max(current_area, kept_area)
+            
+            # If boxes overlap significantly and have similar sizes, consider as duplicate
+            if iou > iou_threshold and area_ratio > area_ratio_threshold:
+                keep = False
+                break
+        
+        if keep:
+            keep_indices.append(current_idx)
     
-    # Use custom labels for annotation
-    if custom_labels:
-        label_annotator = sv.LabelAnnotator()
-        annotated_image = label_annotator.annotate(
-            scene=annotated_image, 
-            detections=detections,
-            labels=custom_labels
-        )
+    # Create a new Detections object with only the kept indices
+    if keep_indices:
+        return detections[keep_indices]
+    else:
+        return detections[0:0]  # Empty detections
 
-    return annotated_image, color_counts
+def detection(file_path,model,conf_threshold=0.4, iou_threshold=0.5):
+    """
+    Main detection function that matches the process_image function from your notebook
+    
+    Args:
+    - file_path: Path to the image file
+    - model: Loaded object detection model
+    
+    Returns:
+    - annotated_image: PIL Image with annotations
+    - color_counts: Dictionary with color counts
+    """
+    # Use same implementation as process_image from notebook
+    image = Image.open(file_path)
+    image = ImageOps.exif_transpose(image)
+    image = image.convert("RGB")
+    #image = Image.fromarray(histogram_equalization(np.array(image)))
+
+    # Detect objects - exactly as in the notebook
+    results = model(image, verbose=False, conf=conf_threshold)[0]
+    detections = sv.Detections.from_ultralytics(results).with_nms()
+    filtered_detections = filter_duplicate_detections(
+        detections, 
+        iou_threshold=iou_threshold,
+        area_ratio_threshold=0.5
+    )
+    # Annotate image
+    box_annotator = sv.BoxAnnotator(thickness=5)
+    label_annotator = sv.LabelAnnotator()
+    annotated_image = image.copy()
+    annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections)
+    annotated_image = label_annotator.annotate(scene=annotated_image, detections=detections)
+
+    # Count colors - same as notebook
+    dict_count = {}
+    for i, box in enumerate(detections.xyxy):
+        avg_color = detect_color_from_bbox(image, box)
+        color = identify_color(*avg_color)
+
+        # Count colors
+        dict_count[color] = dict_count.get(color, 0) + 1
+
+    # Print results - keep identical to notebook
+    for key, value in dict_count.items():
+        print(f"{key}: {value}")
+
+    print(f"Number of detections: {len(detections.xyxy)}")
+    print(f"Number of boxes drawn: {len(detections)}")
+
+    # Return exactly what's needed
+    return annotated_image, dict_count

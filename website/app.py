@@ -3,6 +3,7 @@ import os
 import cv2
 import torch
 import pandas as pd
+import numpy as np
 from PIL import Image, ImageOps
 import time
 
@@ -252,16 +253,48 @@ def process_image(file_path, filename=None):
             # Save the annotated image
             if not os.path.exists("images"):
                 os.makedirs("images")
-                
+            
+            # FIX: Handle different image formats appropriately
             annotated_image_path = os.path.join("images", f"annotated_{filename or 'captured_image.jpg'}")
-            cv2.imwrite(annotated_image_path, annotated_image)
+            
+            # Check if annotated_image is a PIL Image and convert if needed
+            if hasattr(annotated_image, 'convert'):  # Check if it's a PIL Image
+                annotated_image = np.array(annotated_image)
+                # Convert RGB to BGR if needed (PIL uses RGB, OpenCV uses BGR)
+                if len(annotated_image.shape) == 3 and annotated_image.shape[2] == 3:
+                    annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
+            
+            # Ensure annotated_image is a valid numpy array
+            if annotated_image is not None and isinstance(annotated_image, np.ndarray):
+                try:
+                    # Attempt to save the image
+                    cv2.imwrite(annotated_image_path, annotated_image)
+                except Exception as e:
+                    st.error(f"Error saving annotated image: {e}")
+                    # Fallback: Display the annotated image without saving
+                    annotated_image_path = None
+            else:
+                st.warning("Cannot save annotated image: Invalid image format")
+                annotated_image_path = None
             
             # Display results in columns
             col1, col2 = st.columns(2)
             
             with col1:
                 st.markdown('<div class="section-header">📊 Detection Results</div>', unsafe_allow_html=True)
-                st.image(annotated_image, caption="Detected Plates", use_column_width=True)
+                # Display the image - if we couldn't save it, just show the original
+                if annotated_image_path and os.path.exists(annotated_image_path):
+                    st.image(annotated_image_path, caption="Detected Plates", use_column_width=True)
+                elif isinstance(annotated_image, np.ndarray):
+                    # If we have a valid numpy array but couldn't save, convert BGR to RGB for display
+                    if len(annotated_image.shape) == 3 and annotated_image.shape[2] == 3:
+                        display_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
+                    else:
+                        display_image = annotated_image
+                    st.image(display_image, caption="Detected Plates", use_column_width=True)
+                else:
+                    # If all else fails, show the original image
+                    st.image(file_path, caption="Original Image (Detection Failed)", use_column_width=True)
                 
                 # Display detection summary
                 plate_count = sum(color_counts.values())
@@ -271,11 +304,16 @@ def process_image(file_path, filename=None):
                 st.markdown('<div class="section-header">💵 Cost Calculation</div>', unsafe_allow_html=True)
                 display_cost_table(color_counts, prices)
             
+            # Store color_counts in session state for MAE calculation
+            st.session_state['color_counts'] = color_counts
+            
             return color_counts
             
         except Exception as e:
             st.error(f"Error processing image: {e}")
-            return False
+            import traceback
+            st.error(f"Traceback: {traceback.format_exc()}")
+            return {}
 
 # Camera tab content
 with tab1:

@@ -22,6 +22,7 @@ conda install -c pytorch torchvision -y
 ### ติดตั้งผ่าน Pip
 
 ```sh
+pip install -r requirements.txt
 pip install ipython colorsys
 ```
 

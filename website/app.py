@@ -284,17 +284,17 @@ def process_image(file_path, filename=None):
                 st.markdown('<div class="section-header">📊 Detection Results</div>', unsafe_allow_html=True)
                 # Display the image - if we couldn't save it, just show the original
                 if annotated_image_path and os.path.exists(annotated_image_path):
-                    st.image(annotated_image_path, caption="Detected Plates", use_column_width=True)
+                    st.image(annotated_image_path, caption="Detected Plates", use_container_width =True)
                 elif isinstance(annotated_image, np.ndarray):
                     # If we have a valid numpy array but couldn't save, convert BGR to RGB for display
                     if len(annotated_image.shape) == 3 and annotated_image.shape[2] == 3:
                         display_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
                     else:
                         display_image = annotated_image
-                    st.image(display_image, caption="Detected Plates", use_column_width=True)
+                    st.image(display_image, caption="Detected Plates", use_container_width =True)
                 else:
                     # If all else fails, show the original image
-                    st.image(file_path, caption="Original Image (Detection Failed)", use_column_width=True)
+                    st.image(file_path, caption="Original Image (Detection Failed)", use_container_width =True)
                 
                 # Display detection summary
                 plate_count = sum(color_counts.values())
@@ -373,7 +373,7 @@ with tab2:
                 st.markdown('<div class="result-section">', unsafe_allow_html=True)
                 
                 # Display the uploaded image
-                st.image(file.getvalue(), caption=file.name, use_column_width=True)
+                st.image(file.getvalue(), caption=file.name, use_container_width =True)
                 
                 # Process the uploaded image
                 file_path = os.path.join("images", file.name)

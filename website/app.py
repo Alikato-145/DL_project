@@ -6,6 +6,8 @@ import pandas as pd
 from PIL import Image, ImageOps
 import time
 
+from mae import calculate_mae
+
 # Import the patched ultralytics first
 from fix_ultralytics import ultralytics
 from ultralytics import YOLO
@@ -197,8 +199,6 @@ def display_cost_table(color_counts, prices):
             "Subtotal": f"฿{item_total}"
         })
     
-    # Add a total row
-    
     # Create a DataFrame for the table
     df = pd.DataFrame(table_data)
     
@@ -209,7 +209,26 @@ def display_cost_table(color_counts, prices):
     # Display a large, highlighted total
     st.markdown(f'<div class="highlight-total">💰 Total Cost: ฿{total_price}</div>', unsafe_allow_html=True)
     
-    return total_price
+    return 
+
+def calculate_mae_and_display(real_counts, color_counts):
+    # Calculate MAE
+    mae_result = calculate_mae(real_counts, color_counts)
+    
+    # Display MAE results
+    st.markdown('<div class="section-header">📊 Evaluation Results</div>', unsafe_allow_html=True)
+    
+    st.write("### Mean Absolute Error (MAE) Results")
+    st.write(f"**Total Plates Detected:** {mae_result['total_predicted']}")
+    st.write(f"**Total Plates Real:** {mae_result['total_real']}")
+    st.write(f"**Absolute Total Error:** {mae_result['absolute_total_error']}")
+    
+    st.write(f"**Mean Absolute Error (MAE):** {mae_result['mae']}")
+    st.write("### Detailed Color Errors")
+    for color, error in mae_result['color_errors'].items():
+        st.write(f"- {color}: {error} plates")
+    st.write(f"**Total Error:** {mae_result['total_error']} plates")
+
 
 # Function to process images and display results
 def process_image(file_path, filename=None):
@@ -252,7 +271,7 @@ def process_image(file_path, filename=None):
                 st.markdown('<div class="section-header">💵 Cost Calculation</div>', unsafe_allow_html=True)
                 display_cost_table(color_counts, prices)
             
-            return True
+            return color_counts
             
         except Exception as e:
             st.error(f"Error processing image: {e}")
@@ -279,10 +298,11 @@ with tab1:
         
         # Process the captured image
         st.markdown('<div class="result-section">', unsafe_allow_html=True)
-        process_image(file_path)
+        color_counts = process_image(file_path, "captured_image.jpg")
         st.markdown('</div>', unsafe_allow_html=True)
-    
+
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 # Upload tab content
 with tab2:
@@ -319,11 +339,45 @@ with tab2:
                 
                 # Process the uploaded image
                 file_path = os.path.join("images", file.name)
-                process_image(file_path, file.name)
+                color_counts = process_image(file_path, file.name)
                 
                 st.markdown('</div>', unsafe_allow_html=True)
-    
+
     st.markdown('</div>', unsafe_allow_html=True)
+
+def add_sidebar():
+    with st.sidebar:
+        st.markdown('<div class="section-header">📊 Evaluation Tool</div>', unsafe_allow_html=True)
+        
+        st.markdown('<div class="price-card">', unsafe_allow_html=True)
+        st.write("Enter the actual plate counts for evaluation:")
+        
+        # Add input fields for each color
+        real_counts = {}
+        colors = ["Red", "Yellow", "Green", "Blue", "Cyan", "Purple", "White", "Black"]
+        
+        for color in colors:
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                st.markdown(f'<div style="display: flex; align-items: center; height: 38px;"><span class="color-dot" style="background-color: {color_hex[color]}; width: 20px; height: 20px; border-radius: 50%; display: inline-block;"></span></div>', unsafe_allow_html=True)
+            with col2:
+                real_counts[color] = st.number_input(f"Actual {color} count", min_value=0, value=0, step=1, key=f"real_{color}")
+        
+        st.session_state['real_counts'] = real_counts
+        st.markdown('</div>', unsafe_allow_html=True)
+
+add_sidebar()
+# Display MAE results if real counts are provided
+if st.sidebar.button("Calculate MAE"):
+    real_counts = st.session_state['real_counts']
+    color_counts = st.session_state.get('color_counts', {})
+    st.markdown('<div class="section-header">📊 MAE Calculation</div>', unsafe_allow_html=True)
+    if any(real_counts.values()):
+        calculate_mae_and_display(real_counts, color_counts)
+    else:
+        st.warning("Please enter actual counts to calculate MAE.")
+# Display the MAE input section 
+
 
 # Footer
 st.markdown("---")

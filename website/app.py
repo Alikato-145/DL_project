@@ -161,8 +161,8 @@ with st.sidebar:
     st.markdown('</div>', unsafe_allow_html=True)
     
     st.markdown('<div class="section-header">🛠️ Advanced Settings</div>', unsafe_allow_html=True)
-    conf_threshold = 0.3
-    iou_threshold = 0.5
+    conf_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.5, 0.01)
+    iou_threshold = st.slider("IOU Threshold", 0.0, 1.0, 0.5, 0.01)
     
     st.markdown('<div class="section-header">ℹ️ App Info</div>', unsafe_allow_html=True)
     st.info("""
